@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "dotenv/config";
 import * as readline from "readline";
 import * as path from "path";
 import chalk from "chalk";
