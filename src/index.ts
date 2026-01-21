@@ -11,7 +11,7 @@ import type { Message } from "./types.js";
 function parseArgs(): { workingDir: string; model: string } {
   const args = process.argv.slice(2);
   let workingDir = process.cwd();
-  let model = "claude-sonnet-4-20250514";
+  let model = process.env.MODEL || "claude-sonnet-4-20250514";
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dir" || args[i] === "-d") {
