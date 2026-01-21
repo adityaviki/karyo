@@ -5,53 +5,75 @@ import * as readline from "readline";
 import * as path from "path";
 import chalk from "chalk";
 import { runAgent, clearConversation } from "./agent.js";
+import { login, logout, status, loadAuth } from "./auth.js";
 import type { Message } from "./types.js";
 
 // Parse command line arguments
-function parseArgs(): { workingDir: string; model: string } {
+async function parseArgs(): Promise<{ workingDir: string; model: string; action: "run" | "login" | "logout" | "status" }> {
   const args = process.argv.slice(2);
   let workingDir = process.cwd();
-  let model = process.env.MODEL || "claude-sonnet-4-20250514";
+  let model = process.env.MODEL || "claude-opus-4-5-20251101";
+  let action: "run" | "login" | "logout" | "status" = "run";
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dir" || args[i] === "-d") {
       workingDir = path.resolve(args[++i] || ".");
     } else if (args[i] === "--model" || args[i] === "-m") {
       model = args[++i] || model;
+    } else if (args[i] === "--login") {
+      action = "login";
+    } else if (args[i] === "--logout") {
+      action = "logout";
+    } else if (args[i] === "--status") {
+      action = "status";
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(`
-Simple Agent - A CLI coding assistant
+${chalk.bold("Karyo")} - A CLI coding assistant
 
-Usage: npx tsx src/index.ts [options]
+${chalk.bold("Usage:")} npx tsx src/index.ts [options]
 
-Options:
+${chalk.bold("Options:")}
   -d, --dir <path>    Working directory (default: current directory)
-  -m, --model <name>  Model to use (default: claude-sonnet-4-20250514)
+  -m, --model <name>  Model to use (default: claude-opus-4-5-20251101)
   -h, --help          Show this help message
 
-Commands (during chat):
+${chalk.bold("Authentication:")}
+  --login             Login with Claude Pro/Max or API key
+  --logout            Clear saved authentication
+  --status            Show current auth status
+
+${chalk.bold("Commands (during chat):")}
   /exit, /quit        Exit the agent
   /clear              Clear conversation history
   /help               Show available commands
 
-Environment:
-  ANTHROPIC_API_KEY   Your Anthropic API key (required)
+${chalk.bold("Authentication:")}
+  Anthropic API key (set via --login)
 `);
       process.exit(0);
     }
   }
 
-  return { workingDir, model };
+  return { workingDir, model, action };
 }
 
 // Print welcome message
-function printWelcome(workingDir: string, model: string): void {
+async function printWelcome(workingDir: string, model: string): Promise<void> {
+  const auth = await loadAuth();
+
   console.log(chalk.bold.blue("\n╭─────────────────────────────────────╮"));
-  console.log(chalk.bold.blue("│         Simple Coding Agent         │"));
+  console.log(chalk.bold.blue("│             Karyo Agent             │"));
   console.log(chalk.bold.blue("╰─────────────────────────────────────╯"));
   console.log();
   console.log(chalk.gray(`Working directory: ${workingDir}`));
   console.log(chalk.gray(`Model: ${model}`));
+
+  if (auth) {
+    console.log(chalk.green("Auth: API Key"));
+  } else {
+    console.log(chalk.yellow("Auth: Not configured (run --login)"));
+  }
+
   console.log();
   console.log(chalk.gray("Type your message and press Enter."));
   console.log(chalk.gray("Commands: /exit, /clear, /help"));
@@ -87,7 +109,6 @@ ${chalk.bold("Tips:")}
   - The agent can read, write, and edit files
   - It can execute bash commands (with permission for dangerous ones)
   - Use glob and grep to search for files and content
-  - Multi-line input: end with a blank line
 `);
     return "handled";
   }
@@ -97,15 +118,52 @@ ${chalk.bold("Tips:")}
 
 // Main REPL loop
 async function main(): Promise<void> {
-  // Check for API key
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error(chalk.red("Error: ANTHROPIC_API_KEY environment variable is not set."));
-    console.error(chalk.gray("Set it with: export ANTHROPIC_API_KEY=your-key-here"));
-    process.exit(1);
+  const { workingDir, model, action } = await parseArgs();
+
+  // Handle auth actions
+  if (action === "login") {
+    await login();
+    return;
   }
 
-  const { workingDir, model } = parseArgs();
-  printWelcome(workingDir, model);
+  if (action === "logout") {
+    await logout();
+    return;
+  }
+
+  if (action === "status") {
+    await status();
+    return;
+  }
+
+  // Check for any auth method
+  const auth = await loadAuth();
+  if (!auth) {
+    console.log(chalk.yellow("No authentication configured."));
+    console.log(chalk.gray("Run with --login to authenticate.\n"));
+
+    const shouldLogin = await new Promise<boolean>((resolve) => {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      rl.question("Would you like to login now? (y/N) ", (answer) => {
+        rl.close();
+        resolve(answer.trim().toLowerCase() === "y");
+      });
+    });
+
+    if (shouldLogin) {
+      const success = await login();
+      if (!success) {
+        process.exit(1);
+      }
+    } else {
+      process.exit(1);
+    }
+  }
+
+  await printWelcome(workingDir, model);
 
   const conversation: Message[] = [];
 

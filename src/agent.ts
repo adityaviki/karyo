@@ -1,10 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import chalk from "chalk";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
-import type { ToolContext, Message, ContentBlock, ToolCall } from "./types.js";
-
-// Initialize Anthropic client
-const anthropic = new Anthropic();
+import { loadAuth } from "./auth.js";
+import type { ToolContext, Message } from "./types.js";
 
 // System prompt template
 function buildSystemPrompt(workingDir: string): string {
@@ -33,23 +31,7 @@ Available tools:
 When editing files, make sure to match the exact text including whitespace and indentation.`;
 }
 
-// Extract tool calls from assistant message
-function extractToolCalls(content: Anthropic.ContentBlock[]): ToolCall[] {
-  return content
-    .filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use")
-    .map((block) => ({
-      id: block.id,
-      name: block.name,
-      input: block.input as Record<string, unknown>,
-    }));
-}
-
-// Check if content has any tool calls
-function hasToolCalls(content: Anthropic.ContentBlock[]): boolean {
-  return content.some((block) => block.type === "tool_use");
-}
-
-// Run the agent loop
+// Run agent with Anthropic API key
 export async function runAgent(
   userMessage: string,
   conversation: Message[],
@@ -61,129 +43,108 @@ export async function runAgent(
 ): Promise<void> {
   const {
     workingDir,
-    model = "claude-sonnet-4-20250514",
+    model = process.env.MODEL || "claude-opus-4-5-20251101",
     maxTokens = 8192,
   } = options;
+
+  const auth = await loadAuth();
+  if (!auth) {
+    throw new Error("No authentication configured. Run with --login to authenticate.");
+  }
 
   const systemPrompt = buildSystemPrompt(workingDir);
   const tools = getToolDefinitions();
   const ctx: ToolContext = { workingDir };
 
-  // Add user message to conversation
-  conversation.push({
-    role: "user",
-    content: userMessage,
+  // Add user message
+  conversation.push({ role: "user", content: userMessage });
+
+  const anthropic = new Anthropic({
+    apiKey: auth.key,
   });
 
-  // Agent loop - continue until no more tool calls
   while (true) {
-    try {
-      // Call Claude with streaming
-      console.log(chalk.gray("\n─".repeat(40)));
+    console.log(chalk.gray("\n" + "─".repeat(40)));
 
-      const stream = anthropic.messages.stream({
-        model,
-        max_tokens: maxTokens,
-        system: systemPrompt,
-        tools,
-        messages: conversation as Anthropic.MessageParam[],
-      });
+    // Build messages for Anthropic
+    const messages: Anthropic.MessageParam[] = conversation.map((m) => {
+      if (typeof m.content === "string") {
+        return { role: m.role as "user" | "assistant", content: m.content };
+      }
+      // Handle tool results
+      if (Array.isArray(m.content) && m.content[0]?.type === "tool_result") {
+        return {
+          role: "user" as const,
+          content: m.content.map((tr: any) => ({
+            type: "tool_result" as const,
+            tool_use_id: tr.tool_use_id,
+            content: tr.content,
+          })),
+        };
+      }
+      return m as Anthropic.MessageParam;
+    });
 
-      // Collect response content
-      const contentBlocks: Anthropic.ContentBlock[] = [];
-      let currentText = "";
+    const stream = anthropic.messages.stream({
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      tools,
+      messages,
+    });
 
-      // Process stream events
-      for await (const event of stream) {
-        if (event.type === "content_block_start") {
-          if (event.content_block.type === "text") {
-            currentText = "";
-          } else if (event.content_block.type === "tool_use") {
-            // Show tool call starting
-            console.log(
-              chalk.cyan(`\n[Tool: ${event.content_block.name}]`)
-            );
-          }
-        } else if (event.type === "content_block_delta") {
-          if (event.delta.type === "text_delta") {
-            // Stream text to console
-            process.stdout.write(event.delta.text);
-            currentText += event.delta.text;
-          } else if (event.delta.type === "input_json_delta") {
-            // Tool input is being streamed (we don't need to show this)
-          }
-        } else if (event.type === "content_block_stop") {
-          // Block finished
+    let currentText = "";
+
+    for await (const event of stream) {
+      if (event.type === "content_block_start") {
+        if (event.content_block.type === "tool_use") {
+          console.log(chalk.cyan(`\n[Tool: ${event.content_block.name}]`));
+        }
+      } else if (event.type === "content_block_delta") {
+        if (event.delta.type === "text_delta") {
+          process.stdout.write(event.delta.text);
+          currentText += event.delta.text;
         }
       }
-
-      // Get final message
-      const finalMessage = await stream.finalMessage();
-      contentBlocks.push(...finalMessage.content);
-
-      // Add assistant message to conversation
-      conversation.push({
-        role: "assistant",
-        content: finalMessage.content as ContentBlock[],
-      });
-
-      // Check for tool calls
-      if (hasToolCalls(finalMessage.content)) {
-        const toolCalls = extractToolCalls(finalMessage.content);
-
-        // Execute each tool call
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-        for (const toolCall of toolCalls) {
-          console.log(
-            chalk.yellow(`\nExecuting ${toolCall.name}...`)
-          );
-
-          const result = await executeTool(toolCall.name, toolCall.input, ctx);
-
-          // Show brief result
-          if (result.isError) {
-            console.log(chalk.red(`Error: ${result.output.slice(0, 200)}`));
-          }
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: toolCall.id,
-            content: result.output,
-            is_error: result.isError,
-          });
-        }
-
-        // Add tool results to conversation
-        conversation.push({
-          role: "user",
-          content: toolResults,
-        });
-
-        // Continue loop to process tool results
-        continue;
-      }
-
-      // No more tool calls, we're done
-      console.log(chalk.gray("\n" + "─".repeat(40)));
-      break;
-    } catch (error) {
-      if (error instanceof Anthropic.APIError) {
-        console.error(chalk.red(`\nAPI Error: ${error.message}`));
-
-        if (error.status === 429) {
-          console.log(chalk.yellow("Rate limited. Waiting 10 seconds..."));
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-          continue;
-        }
-      }
-
-      throw error;
     }
+
+    const finalMessage = await stream.finalMessage();
+
+    conversation.push({ role: "assistant", content: finalMessage.content as any });
+
+    // Check for tool calls
+    const toolUseBlocks = finalMessage.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    );
+
+    if (toolUseBlocks.length > 0) {
+      const toolResults: any[] = [];
+
+      for (const block of toolUseBlocks) {
+        console.log(chalk.yellow(`\nExecuting ${block.name}...`));
+        const result = await executeTool(block.name, block.input as Record<string, unknown>, ctx);
+
+        if (result.isError) {
+          console.log(chalk.red(`Error: ${result.output.slice(0, 200)}`));
+        }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result.output,
+        });
+      }
+
+      conversation.push({ role: "user", content: toolResults });
+      continue;
+    }
+
+    console.log(chalk.gray("\n" + "─".repeat(40)));
+    break;
   }
 }
 
-// Clear conversation history (keep system prompt behavior)
+// Clear conversation history
 export function clearConversation(conversation: Message[]): void {
   conversation.length = 0;
 }

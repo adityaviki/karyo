@@ -6,21 +6,35 @@ A simplified CLI coding agent for personal use, inspired by Claude Code.
 
 ```bash
 npm install
-export ANTHROPIC_API_KEY=your-key-here
-npm start
+npm start -- --login
+```
+
+## Authentication
+
+Anthropic API key authentication:
+
+```bash
+npm start -- --login
+# Enter your Anthropic API key
 ```
 
 ## Usage
 
 ```bash
-# Start in current directory
+# Start the agent
 npm start
 
-# Start in specific directory
+# With specific directory
 npm start -- --dir /path/to/project
 
-# Use a different model
+# Different model
 npm start -- --model claude-sonnet-4-20250514
+
+# Check auth status
+npm start -- --status
+
+# Logout
+npm start -- --logout
 ```
 
 ### Commands
@@ -44,4 +58,4 @@ npm start -- --model claude-sonnet-4-20250514
 
 - Dangerous commands (rm, sudo, git push) require confirmation
 - File overwrites and edits require confirmation
-- Responses stream in real-time
+- API key is stored in `~/.simple-agent-auth.json`
