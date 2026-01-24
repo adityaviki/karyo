@@ -5,7 +5,7 @@ import * as readline from "readline";
 import * as path from "path";
 import chalk from "chalk";
 import type { CoreMessage } from "ai";
-import { runAgent, clearConversation } from "./agent.js";
+import { runAgent, clearConversation, formatContextStats } from "./agent.js";
 import { login, logout, status, loadAuth } from "./auth.js";
 import { getAllModels, PROVIDERS } from "./types.js";
 
@@ -97,6 +97,7 @@ ${chalk.bold("Authentication:")}
 ${chalk.bold("Commands (during chat):")}
   /exit, /quit        Exit the agent
   /clear              Clear conversation history
+  /context            Show context usage statistics
   /model              Change model
   /help               Show available commands
 
@@ -136,14 +137,15 @@ async function printWelcome(workingDir: string, model: string): Promise<void> {
 
   console.log();
   console.log(chalk.gray("Type your message and press Enter."));
-  console.log(chalk.gray("Commands: /exit, /clear, /model, /help"));
+  console.log(chalk.gray("Commands: /exit, /clear, /context, /model, /help"));
   console.log();
 }
 
 // Handle special commands
 function handleCommand(
   input: string,
-  conversation: CoreMessage[]
+  conversation: CoreMessage[],
+  model: string
 ): "continue" | "exit" | "handled" | "model" {
   const command = input.trim().toLowerCase();
 
@@ -162,13 +164,25 @@ function handleCommand(
     return "model";
   }
 
+  if (command === "/context") {
+    console.log(formatContextStats(conversation, model));
+    return "handled";
+  }
+
   if (command === "/help") {
     console.log(`
 ${chalk.bold("Available commands:")}
   /exit, /quit, /q    Exit the agent
   /clear              Clear conversation history
+  /context            Show context usage statistics
   /model              Change the model
   /help               Show this help message
+
+${chalk.bold("Context Management:")}
+  - Context is automatically managed to stay within model limits
+  - Old tool outputs are pruned when approaching 70% capacity
+  - Conversation is summarized when approaching 85% capacity
+  - Use /context to check current usage
 
 ${chalk.bold("Tips:")}
   - The agent can read, write, and edit files
@@ -255,7 +269,7 @@ async function main(): Promise<void> {
 
       // Check for commands
       if (trimmed.startsWith("/")) {
-        const result = handleCommand(trimmed, conversation);
+        const result = handleCommand(trimmed, conversation, model);
         if (result === "exit") {
           rl.close();
           return;
@@ -281,7 +295,7 @@ async function main(): Promise<void> {
                 return;
               }
               if (newTrimmed.startsWith("/")) {
-                const cmdResult = handleCommand(newTrimmed, conversation);
+                const cmdResult = handleCommand(newTrimmed, conversation, model);
                 if (cmdResult === "exit") {
                   newRl.close();
                   return;

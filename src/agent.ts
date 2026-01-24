@@ -6,6 +6,8 @@ import chalk from "chalk";
 import { getTools } from "./tools/index.js";
 import { loadAuth } from "./auth.js";
 import { getProviderId, type ToolContext } from "./types.js";
+import { ContextManager } from "./context.js";
+import { formatTokens } from "./util/token.js";
 
 // Provider registry - lazily initialized with API keys
 const providers = {
@@ -42,7 +44,7 @@ When editing files, make sure to match the exact text including whitespace and i
 }
 
 // Get the language model for a given model ID
-async function getModel(modelId: string): Promise<LanguageModel> {
+export async function getModel(modelId: string): Promise<LanguageModel> {
   const auth = await loadAuth();
   const providerId = getProviderId(modelId);
 
@@ -92,6 +94,9 @@ export async function runAgent(
   // Get the model
   const model = await getModel(modelId);
 
+  // Create context manager
+  const contextManager = new ContextManager(modelId);
+
   // Create tool context
   const ctx: ToolContext = { workingDir };
   const tools = getTools(ctx);
@@ -99,13 +104,29 @@ export async function runAgent(
   // Add user message to conversation
   messages.push({ role: "user", content: userMessage });
 
+  // Process messages for context management (pruning/compaction)
+  const { messages: processedMessages, action } = await contextManager.processMessages(
+    messages,
+    model
+  );
+
+  // If messages were compacted, update the original array
+  if (action === "compacted") {
+    messages.length = 0;
+    messages.push(...processedMessages);
+  } else if (action === "pruned") {
+    // Update messages in place with pruned versions
+    messages.length = 0;
+    messages.push(...processedMessages);
+  }
+
   console.log(chalk.gray("\n" + "─".repeat(40)));
 
   // Use AI SDK's streamText - works identically for ALL providers
   const result = streamText({
     model,
     system: buildSystemPrompt(workingDir),
-    messages,
+    messages: processedMessages,
     tools,
     maxTokens,
     maxSteps: 20, // Allow up to 20 tool call rounds
@@ -154,18 +175,51 @@ export async function runAgent(
 
   console.log(chalk.gray("\n" + "─".repeat(40)));
 
-  // Log usage statistics
+  // Log usage and context statistics
   const usage = await result.usage;
+  const stats = contextManager.getStats(messages);
+
   if (usage) {
     console.log(
       chalk.gray(
-        `\nTokens: ${usage.promptTokens} input, ${usage.completionTokens} output`
+        `Tokens: ${usage.promptTokens} in, ${usage.completionTokens} out | ` +
+        `Context: ${formatTokens(stats.estimatedTokens)}/${formatTokens(stats.usableContext)} (${stats.usagePercent}%)`
       )
     );
+  } else {
+    console.log(
+      chalk.gray(
+        `Context: ${formatTokens(stats.estimatedTokens)}/${formatTokens(stats.usableContext)} (${stats.usagePercent}%)`
+      )
+    );
+  }
+
+  // Warn if approaching limits
+  if (stats.usagePercent > 70) {
+    console.log(chalk.yellow(`⚠ Context at ${stats.usagePercent}% - will auto-manage soon`));
   }
 }
 
 // Clear conversation history
 export function clearConversation(messages: CoreMessage[]): void {
   messages.length = 0;
+}
+
+// Get context stats for display
+export function getContextStats(
+  messages: CoreMessage[],
+  modelId: string
+): ReturnType<ContextManager["getStats"]> {
+  const contextManager = new ContextManager(modelId);
+  return contextManager.getStats(messages);
+}
+
+// Format context stats for display
+export function formatContextStats(
+  messages: CoreMessage[],
+  modelId: string
+): string {
+  const contextManager = new ContextManager(modelId);
+  const stats = contextManager.getStats(messages);
+  return contextManager.formatStats(stats);
 }

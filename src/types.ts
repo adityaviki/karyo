@@ -96,3 +96,45 @@ export function getProviderId(modelId: string): string {
   if (modelId.startsWith("gpt") || modelId.startsWith("o1")) return "openai";
   throw new Error(`Unknown model: ${modelId}`);
 }
+
+// Model context and output limits
+export interface ModelLimits {
+  context: number;
+  output: number;
+}
+
+export const MODEL_LIMITS: Record<string, ModelLimits> = {
+  // Anthropic - 200k context
+  "claude-opus-4-5-20251101": { context: 200000, output: 32000 },
+  "claude-sonnet-4-5-20250929": { context: 200000, output: 32000 },
+  "claude-sonnet-4-20250514": { context: 200000, output: 32000 },
+  "claude-haiku-3-5-20241022": { context: 200000, output: 32000 },
+  // Google - large context windows
+  "gemini-2.0-flash": { context: 1000000, output: 8192 },
+  "gemini-2.0-pro": { context: 2000000, output: 8192 },
+  "gemini-1.5-pro": { context: 2000000, output: 8192 },
+  // OpenAI
+  "gpt-4o": { context: 128000, output: 16384 },
+  "gpt-4o-mini": { context: 128000, output: 16384 },
+  "o1": { context: 200000, output: 100000 },
+  "o1-mini": { context: 128000, output: 65536 },
+};
+
+// Get model limits with fallback defaults
+export function getModelLimits(modelId: string): ModelLimits {
+  if (MODEL_LIMITS[modelId]) {
+    return MODEL_LIMITS[modelId];
+  }
+  // Fallback based on provider
+  const providerId = getProviderId(modelId);
+  switch (providerId) {
+    case "anthropic":
+      return { context: 200000, output: 32000 };
+    case "google":
+      return { context: 1000000, output: 8192 };
+    case "openai":
+      return { context: 128000, output: 16384 };
+    default:
+      return { context: 100000, output: 8192 };
+  }
+}

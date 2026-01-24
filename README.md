@@ -46,14 +46,6 @@ npm start -- --status
 npm start -- --logout
 ```
 
-### Models
-
-| Provider | Models |
-|----------|--------|
-| Anthropic | `claude-opus-4-5-20251101`, `claude-sonnet-4-20250514` (default), `claude-haiku-3-5-20241022` |
-| Google | `gemini-2.0-flash`, `gemini-2.0-pro`, `gemini-1.5-pro` |
-| OpenAI | `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini` |
-
 ### Commands
 
 - `/exit` - Exit the agent
