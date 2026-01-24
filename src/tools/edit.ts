@@ -2,7 +2,11 @@ import { z } from "zod";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { createTwoFilesPatch } from "diff";
-import { type ToolDefinition, type ToolContext, type ToolResult } from "../types.js";
+import {
+  type ToolDefinition,
+  type ToolContext,
+  type ToolResult,
+} from "../types.js";
 import { askPermission } from "../permission.js";
 
 const parameters = z.object({
@@ -17,8 +21,11 @@ const parameters = z.object({
 
 type EditParams = z.infer<typeof parameters>;
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as EditParams;
+async function execute(
+  rawArgs: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const args = rawArgs as EditParams;
   const { file_path, old_string, new_string, replace_all = false } = args;
 
   // Resolve path
@@ -50,8 +57,11 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> 
 
       let hint = "";
       if (similarLines.length > 0) {
-        hint = "\n\nSimilar lines found:\n" +
-          similarLines.map(({ line, num }) => `  Line ${num}: ${line.slice(0, 100)}`).join("\n");
+        hint =
+          "\n\nSimilar lines found:\n" +
+          similarLines
+            .map(({ line, num }) => `  Line ${num}: ${line.slice(0, 100)}`)
+            .join("\n");
       }
 
       return {
@@ -82,13 +92,13 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> 
       content,
       newContent,
       "original",
-      "modified"
+      "modified",
     );
 
     // Ask permission
     const allowed = await askPermission(
       "edit",
-      `Edit file: ${resolvedPath}\n\n${diff}`
+      `Edit file: ${resolvedPath}\n\n${diff}`,
     );
 
     if (!allowed) {

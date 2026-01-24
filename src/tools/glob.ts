@@ -14,8 +14,8 @@ const parameters = z.object({
 
 type GlobParams = z.infer<typeof parameters>;
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as GlobParams;
+async function execute(rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const args = rawArgs as GlobParams;
   const { pattern, directory } = args;
 
   // Resolve directory

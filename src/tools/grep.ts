@@ -24,8 +24,8 @@ interface Match {
   content: string;
 }
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as GrepParams;
+async function execute(rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const args = rawArgs as GrepParams;
   const { pattern, directory, include } = args;
 
   // Resolve directory

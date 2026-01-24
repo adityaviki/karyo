@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type Anthropic from "@anthropic-ai/sdk";
+import type { CoreMessage } from "ai";
 
 // Tool context passed to every tool execution
 export interface ToolContext {
@@ -11,8 +11,8 @@ export interface ToolContext {
 export interface ToolDefinition {
   name: string;
   description: string;
-  parameters: z.ZodType;
-  execute: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;
+  parameters: z.ZodObject<z.ZodRawShape>;
+  execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 }
 
 // Result returned by tool execution
@@ -21,31 +21,8 @@ export interface ToolResult {
   isError?: boolean;
 }
 
-// Anthropic message types
-export type MessageRole = "user" | "assistant";
-
-export type ContentBlock =
-  | Anthropic.TextBlock
-  | Anthropic.ToolUseBlock
-  | Anthropic.ToolResultBlockParam;
-
-export interface Message {
-  role: MessageRole;
-  content: string | ContentBlock[];
-}
-
-// Conversation state
-export interface Conversation {
-  messages: Message[];
-  systemPrompt: string;
-}
-
-// Tool call from assistant
-export interface ToolCall {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
+// Re-export AI SDK message type
+export type Message = CoreMessage;
 
 // Permission types
 export type PermissionAction = "bash" | "write" | "edit";
@@ -55,95 +32,67 @@ export interface PermissionRequest {
   details: string;
 }
 
-// Convert our tool definition to Anthropic's format
-export function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
-  return {
-    name: tool.name,
-    description: tool.description,
-    input_schema: zodToJsonSchema(tool.parameters),
-  };
+// Provider configuration
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  models: ModelConfig[];
 }
 
-// Convert Zod schema to JSON Schema for Anthropic
-function zodToJsonSchema(schema: z.ZodType): Anthropic.Tool.InputSchema {
-  const jsonSchema = zodToJson(schema);
-  return jsonSchema as Anthropic.Tool.InputSchema;
+export interface ModelConfig {
+  id: string;
+  name: string;
+  description: string;
 }
 
-// Simple Zod to JSON Schema converter
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function zodToJson(schema: z.ZodType): Record<string, unknown> {
-  // Access internal Zod properties
-  const def = (schema as any)._def;
-  const typeName = def?.typeName as string | undefined;
+// Available providers and their models
+export const PROVIDERS: ProviderConfig[] = [
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    models: [
+      { id: "claude-opus-4-5-20251101", name: "Claude Opus 4.5", description: "Most capable" },
+      { id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5", description: "Balanced" },
+      { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", description: "Fast and capable" },
+      { id: "claude-haiku-3-5-20241022", name: "Claude Haiku 3.5", description: "Fastest" },
+    ],
+  },
+  {
+    id: "google",
+    name: "Google",
+    models: [
+      { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash", description: "Fast multimodal" },
+      { id: "gemini-2.0-pro", name: "Gemini 2.0 Pro", description: "Advanced reasoning" },
+      { id: "gemini-1.5-pro", name: "Gemini 1.5 Pro", description: "Long context" },
+    ],
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    models: [
+      { id: "gpt-4o", name: "GPT-4o", description: "Most capable" },
+      { id: "gpt-4o-mini", name: "GPT-4o Mini", description: "Fast and affordable" },
+      { id: "o1", name: "o1", description: "Advanced reasoning" },
+      { id: "o1-mini", name: "o1 Mini", description: "Fast reasoning" },
+    ],
+  },
+];
 
-  if (typeName === "ZodObject") {
-    const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
-    const properties: Record<string, unknown> = {};
-    const required: string[] = [];
+// Get all models flattened
+export function getAllModels() {
+  return PROVIDERS.flatMap((p) =>
+    p.models.map((m) => ({
+      ...m,
+      provider: p.name,
+      providerId: p.id,
+    }))
+  );
+}
 
-    for (const [key, value] of Object.entries(shape)) {
-      const fieldSchema = value as z.ZodType;
-      const fieldDef = (fieldSchema as any)._def;
-      properties[key] = zodToJson(fieldSchema);
-
-      // Check if field is optional
-      if (fieldDef?.typeName !== "ZodOptional") {
-        required.push(key);
-      }
-    }
-
-    return {
-      type: "object",
-      properties,
-      required: required.length > 0 ? required : undefined,
-    };
-  }
-
-  if (typeName === "ZodString") {
-    const result: Record<string, unknown> = { type: "string" };
-    if (def.description) result.description = def.description;
-    return result;
-  }
-
-  if (typeName === "ZodNumber") {
-    const result: Record<string, unknown> = { type: "number" };
-    if (def.description) result.description = def.description;
-    return result;
-  }
-
-  if (typeName === "ZodBoolean") {
-    const result: Record<string, unknown> = { type: "boolean" };
-    if (def.description) result.description = def.description;
-    return result;
-  }
-
-  if (typeName === "ZodArray") {
-    const innerSchema = def.type as z.ZodType;
-    return {
-      type: "array",
-      items: zodToJson(innerSchema),
-    };
-  }
-
-  if (typeName === "ZodOptional") {
-    const innerSchema = def.innerType as z.ZodType;
-    return zodToJson(innerSchema);
-  }
-
-  if (typeName === "ZodDefault") {
-    const innerSchema = def.innerType as z.ZodType;
-    return zodToJson(innerSchema);
-  }
-
-  if (typeName === "ZodEnum") {
-    const values = def.values as string[];
-    return {
-      type: "string",
-      enum: values,
-    };
-  }
-
-  // Fallback
-  return { type: "string" };
+// Detect provider from model ID
+export function getProviderId(modelId: string): string {
+  if (modelId.startsWith("claude")) return "anthropic";
+  if (modelId.startsWith("gemini")) return "google";
+  if (modelId.startsWith("gpt") || modelId.startsWith("o1")) return "openai";
+  throw new Error(`Unknown model: ${modelId}`);
 }

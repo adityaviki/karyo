@@ -13,8 +13,8 @@ const parameters = z.object({
 
 type BashParams = z.infer<typeof parameters>;
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as BashParams;
+async function execute(rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const args = rawArgs as BashParams;
   const { command, timeout = 120000 } = args;
 
   // Check for dangerous commands

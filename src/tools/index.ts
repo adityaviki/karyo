@@ -1,5 +1,5 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { type ToolDefinition, type ToolContext, type ToolResult, toAnthropicTool } from "../types.js";
+import { tool, type CoreTool } from "ai";
+import type { ToolDefinition, ToolContext } from "../types.js";
 import { readTool } from "./read.js";
 import { globTool } from "./glob.js";
 import { grepTool } from "./grep.js";
@@ -7,8 +7,8 @@ import { bashTool } from "./bash.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 
-// All available tools
-const tools: ToolDefinition[] = [
+// All available tool definitions
+const toolDefinitions: ToolDefinition[] = [
   readTool,
   globTool,
   grepTool,
@@ -17,42 +17,33 @@ const tools: ToolDefinition[] = [
   editTool,
 ];
 
-// Get tool definitions in Anthropic format
-export function getToolDefinitions(): Anthropic.Tool[] {
-  return tools.map(toAnthropicTool);
+// Convert our tool definitions to AI SDK format
+export function getTools(ctx: ToolContext): Record<string, CoreTool> {
+  const tools: Record<string, CoreTool> = {};
+
+  for (const def of toolDefinitions) {
+    tools[def.name] = tool({
+      description: def.description,
+      parameters: def.parameters,
+      execute: async (args) => {
+        const result = await def.execute(args as Record<string, unknown>, ctx);
+        // AI SDK expects the result to be returned directly
+        return result.output;
+      },
+    });
+  }
+
+  return tools;
 }
 
-// Find a tool by name
+// Find a tool by name (for debugging/inspection)
 export function getTool(name: string): ToolDefinition | undefined {
-  return tools.find((t) => t.name === name);
+  return toolDefinitions.find((t) => t.name === name);
 }
 
-// Execute a tool by name with given arguments
-export async function executeTool(
-  name: string,
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolResult> {
-  const tool = getTool(name);
-
-  if (!tool) {
-    return {
-      output: `Error: Unknown tool "${name}"`,
-      isError: true,
-    };
-  }
-
-  try {
-    // Validate args with Zod schema
-    const validatedArgs = tool.parameters.parse(args);
-    return await tool.execute(validatedArgs, ctx);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      output: `Error executing ${name}: ${message}`,
-      isError: true,
-    };
-  }
+// Get tool names
+export function getToolNames(): string[] {
+  return toolDefinitions.map((t) => t.name);
 }
 
 // Export all tools for direct access

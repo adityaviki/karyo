@@ -4,16 +4,65 @@ import "dotenv/config";
 import * as readline from "readline";
 import * as path from "path";
 import chalk from "chalk";
+import type { CoreMessage } from "ai";
 import { runAgent, clearConversation } from "./agent.js";
 import { login, logout, status, loadAuth } from "./auth.js";
-import type { Message } from "./types.js";
+import { getAllModels, PROVIDERS } from "./types.js";
+
+// Interactive model selector
+async function selectModel(): Promise<string> {
+  const allModels = getAllModels();
+
+  console.log(chalk.bold("\nSelect a model:\n"));
+
+  allModels.forEach((model, index) => {
+    const num = chalk.cyan(`  ${(index + 1).toString().padStart(2)})`);
+    const name = chalk.white(model.name);
+    const provider = chalk.gray(`[${model.provider}]`);
+    const desc = chalk.dim(model.description);
+    console.log(`${num} ${name} ${provider} - ${desc}`);
+  });
+
+  console.log();
+
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    const askSelection = (): void => {
+      rl.question(
+        chalk.green("Enter number (1-" + allModels.length + "): "),
+        (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= allModels.length) {
+            rl.close();
+            const selected = allModels[num - 1];
+            console.log(chalk.green(`\n✓ Selected: ${selected.name}\n`));
+            resolve(selected.id);
+          } else {
+            console.log(chalk.red("Invalid selection. Please try again."));
+            askSelection();
+          }
+        }
+      );
+    };
+
+    askSelection();
+  });
+}
 
 // Parse command line arguments
-async function parseArgs(): Promise<{ workingDir: string; model: string; action: "run" | "login" | "logout" | "status" }> {
+async function parseArgs(): Promise<{
+  workingDir: string;
+  model: string;
+  action: "run" | "login" | "logout" | "status" | "select-model";
+}> {
   const args = process.argv.slice(2);
   let workingDir = process.cwd();
-  let model = process.env.MODEL || "claude-opus-4-5-20251101";
-  let action: "run" | "login" | "logout" | "status" = "run";
+  let model = process.env.MODEL || "claude-sonnet-4-20250514";
+  let action: "run" | "login" | "logout" | "status" | "select-model" = "run";
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dir" || args[i] === "-d") {
@@ -26,29 +75,35 @@ async function parseArgs(): Promise<{ workingDir: string; model: string; action:
       action = "logout";
     } else if (args[i] === "--status") {
       action = "status";
+    } else if (args[i] === "--select" || args[i] === "-s") {
+      action = "select-model";
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(`
-${chalk.bold("Karyo")} - A CLI coding assistant
+${chalk.bold("Karyo")} - A CLI coding assistant powered by Vercel AI SDK
 
 ${chalk.bold("Usage:")} npx tsx src/index.ts [options]
 
 ${chalk.bold("Options:")}
   -d, --dir <path>    Working directory (default: current directory)
-  -m, --model <name>  Model to use (default: claude-opus-4-5-20251101)
+  -m, --model <name>  Model to use (default: claude-sonnet-4-20250514)
+  -s, --select        Interactively select a model
   -h, --help          Show this help message
 
 ${chalk.bold("Authentication:")}
-  --login             Login with Claude Pro/Max or API key
+  --login             Add API key for a provider
   --logout            Clear saved authentication
   --status            Show current auth status
 
 ${chalk.bold("Commands (during chat):")}
   /exit, /quit        Exit the agent
   /clear              Clear conversation history
+  /model              Change model
   /help               Show available commands
 
-${chalk.bold("Authentication:")}
-  Anthropic API key (set via --login)
+${chalk.bold("Supported Providers:")}
+  - Anthropic: claude-* models (Claude Opus, Sonnet, Haiku)
+  - Google: gemini-* models (Gemini 2.0, 1.5)
+  - OpenAI: gpt-* and o1-* models (GPT-4o, o1)
 `);
       process.exit(0);
     }
@@ -63,28 +118,33 @@ async function printWelcome(workingDir: string, model: string): Promise<void> {
 
   console.log(chalk.bold.blue("\n╭─────────────────────────────────────╮"));
   console.log(chalk.bold.blue("│             Karyo Agent             │"));
+  console.log(chalk.bold.blue("│      Powered by Vercel AI SDK       │"));
   console.log(chalk.bold.blue("╰─────────────────────────────────────╯"));
   console.log();
   console.log(chalk.gray(`Working directory: ${workingDir}`));
   console.log(chalk.gray(`Model: ${model}`));
 
-  if (auth) {
-    console.log(chalk.green("Auth: API Key"));
+  if (auth?.anthropic || auth?.google || auth?.openai) {
+    const providers = [];
+    if (auth.anthropic) providers.push("Anthropic");
+    if (auth.google) providers.push("Google");
+    if (auth.openai) providers.push("OpenAI");
+    console.log(chalk.green(`Auth: ${providers.join(", ")}`));
   } else {
     console.log(chalk.yellow("Auth: Not configured (run --login)"));
   }
 
   console.log();
   console.log(chalk.gray("Type your message and press Enter."));
-  console.log(chalk.gray("Commands: /exit, /clear, /help"));
+  console.log(chalk.gray("Commands: /exit, /clear, /model, /help"));
   console.log();
 }
 
 // Handle special commands
 function handleCommand(
   input: string,
-  conversation: Message[]
-): "continue" | "exit" | "handled" {
+  conversation: CoreMessage[]
+): "continue" | "exit" | "handled" | "model" {
   const command = input.trim().toLowerCase();
 
   if (command === "/exit" || command === "/quit" || command === "/q") {
@@ -98,17 +158,23 @@ function handleCommand(
     return "handled";
   }
 
+  if (command === "/model") {
+    return "model";
+  }
+
   if (command === "/help") {
     console.log(`
 ${chalk.bold("Available commands:")}
   /exit, /quit, /q    Exit the agent
   /clear              Clear conversation history
+  /model              Change the model
   /help               Show this help message
 
 ${chalk.bold("Tips:")}
   - The agent can read, write, and edit files
   - It can execute bash commands (with permission for dangerous ones)
   - Use glob and grep to search for files and content
+  - Supports Claude, Gemini, and GPT models via unified AI SDK
 `);
     return "handled";
   }
@@ -118,7 +184,8 @@ ${chalk.bold("Tips:")}
 
 // Main REPL loop
 async function main(): Promise<void> {
-  const { workingDir, model, action } = await parseArgs();
+  const { workingDir, model: initialModel, action } = await parseArgs();
+  let model = initialModel;
 
   // Handle auth actions
   if (action === "login") {
@@ -134,6 +201,11 @@ async function main(): Promise<void> {
   if (action === "status") {
     await status();
     return;
+  }
+
+  // Handle model selection
+  if (action === "select-model") {
+    model = await selectModel();
   }
 
   // Check for any auth method
@@ -165,7 +237,7 @@ async function main(): Promise<void> {
 
   await printWelcome(workingDir, model);
 
-  const conversation: Message[] = [];
+  const conversation: CoreMessage[] = [];
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -186,6 +258,48 @@ async function main(): Promise<void> {
         const result = handleCommand(trimmed, conversation);
         if (result === "exit") {
           rl.close();
+          return;
+        }
+        if (result === "model") {
+          rl.close();
+          model = await selectModel();
+          console.log(chalk.gray(`Model changed to: ${model}`));
+          // Restart readline
+          const newRl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          newRl.on("close", () => {
+            console.log(chalk.yellow("\nGoodbye!"));
+            process.exit(0);
+          });
+          const promptWithRl = (): void => {
+            newRl.question(chalk.green("\n> "), async (newInput) => {
+              const newTrimmed = newInput.trim();
+              if (!newTrimmed) {
+                promptWithRl();
+                return;
+              }
+              if (newTrimmed.startsWith("/")) {
+                const cmdResult = handleCommand(newTrimmed, conversation);
+                if (cmdResult === "exit") {
+                  newRl.close();
+                  return;
+                }
+                promptWithRl();
+                return;
+              }
+              try {
+                await runAgent(newTrimmed, conversation, { workingDir, model });
+              } catch (error) {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                console.error(chalk.red(`\nError: ${message}`));
+              }
+              promptWithRl();
+            });
+          };
+          promptWithRl();
           return;
         }
         prompt();

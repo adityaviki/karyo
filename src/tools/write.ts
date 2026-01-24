@@ -11,8 +11,8 @@ const parameters = z.object({
 
 type WriteParams = z.infer<typeof parameters>;
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as WriteParams;
+async function execute(rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const args = rawArgs as WriteParams;
   const { file_path, content } = args;
 
   // Resolve path

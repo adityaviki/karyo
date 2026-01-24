@@ -17,8 +17,8 @@ const parameters = z.object({
 
 type ReadParams = z.infer<typeof parameters>;
 
-async function execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
-  const args = parameters.parse(rawArgs) as ReadParams;
+async function execute(rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const args = rawArgs as ReadParams;
   const { file_path, offset = 1, limit = 2000 } = args;
 
   // Resolve path relative to working directory if not absolute
