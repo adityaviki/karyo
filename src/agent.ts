@@ -122,6 +122,11 @@ export async function runAgent(
 
   console.log(chalk.gray("\n" + "─".repeat(40)));
 
+  // Debug: log message count
+  if (process.env.DEBUG) {
+    console.log(chalk.gray(`[Debug] Sending ${processedMessages.length} messages to ${modelId}`));
+  }
+
   // Use AI SDK's streamText - works identically for ALL providers
   const result = streamText({
     model,
@@ -130,6 +135,11 @@ export async function runAgent(
     tools,
     maxTokens,
     maxSteps: 20, // Allow up to 20 tool call rounds
+
+    // Called on errors
+    onError: (error) => {
+      console.error(chalk.red(`\nStream error: ${error}`));
+    },
 
     // Called when each step finishes (after tool execution)
     onStepFinish: async (step) => {
@@ -145,9 +155,13 @@ export async function runAgent(
         for (const tr of step.toolResults) {
           // tr.result contains the tool output
           const output = String((tr as { result: unknown }).result || "");
-          // Show truncated output
-          if (output.length > 500) {
-            console.log(chalk.gray(`Result: ${output.slice(0, 500)}...`));
+          // Show output (truncate if too long)
+          if (output.length > 0) {
+            if (output.length > 500) {
+              console.log(chalk.gray(`Result: ${output.slice(0, 500)}...`));
+            } else {
+              console.log(chalk.gray(`Result: ${output}`));
+            }
           }
         }
       }
@@ -155,12 +169,28 @@ export async function runAgent(
   });
 
   // Stream the text output
-  for await (const textPart of result.textStream) {
-    process.stdout.write(textPart);
+  let hasOutput = false;
+  try {
+    for await (const textPart of result.textStream) {
+      hasOutput = true;
+      process.stdout.write(textPart);
+    }
+  } catch (streamError) {
+    console.error(chalk.red(`\nStream iteration error: ${streamError}`));
+    throw streamError;
+  }
+
+  if (!hasOutput) {
+    console.log(chalk.yellow("\n(No text response from model)"));
   }
 
   // Wait for completion and get final response
   const response = await result.response;
+
+  // Debug: log response info
+  if (process.env.DEBUG) {
+    console.log(chalk.gray(`[Debug] Response has ${response.messages?.length || 0} messages`));
+  }
 
   // Add the assistant's final messages to conversation history
   // The AI SDK returns all messages including tool calls and results
